@@ -1,0 +1,5 @@
+# ignore all model files
+*.pb
+
+#ignore pycache
+**/__pycache__

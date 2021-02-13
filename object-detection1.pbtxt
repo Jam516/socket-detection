@@ -1,0 +1,19 @@
+item{
+  id: 1
+  name: 'double socket'
+}
+
+item {
+  id: 2
+  name: 'radiator'
+}
+
+item {
+  id: 3
+  name: 'socket'
+}
+
+item {
+  id: 4
+  name: 'switch'
+}
