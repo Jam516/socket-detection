@@ -1,5 +1,5 @@
 streamlit==0.66.0
-tensorflow-cpu==1.15
+tensorflow
 numpy==1.17.2
 pandas==0.24.2
 pillow==7.2.0

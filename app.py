@@ -15,15 +15,17 @@ from keras_preprocessing.image import ImageDataGenerator
 
 
 # Set up default variables
-PATH_TO_CKPT = 'frozen_inference_graph.pb'
+PATH_TO_CKPT = 'saved_model/saved_model.pb'
 PATH_TO_LABELS = 'object-detection1.pbtxt'
 PATH_TO_IMAGE = 'images/out.png'
 CWD_PATH = os.getcwd()
-NUM_CLASSES = 4
+NUM_CLASSES = 90
 
-label_map = label_map_util.load_labelmap(PATH_TO_LABELS)
-categories = label_map_util.convert_label_map_to_categories(label_map, max_num_classes=NUM_CLASSES, use_display_name=True)
-category_index = label_map_util.create_category_index(categories)
+# label_map = label_map_util.load_labelmap(PATH_TO_LABELS)
+# categories = label_map_util.convert_label_map_to_categories(label_map, max_num_classes=NUM_CLASSES, use_display_name=True)
+# category_index = label_map_util.create_category_index(categories)
+label_map_util.create_category_index_from_labelmap(PATH_TO_LABELS, use_display_name=True)
+
 
 def main():
     st.title("MEP Object Detection 👁")
@@ -99,58 +101,154 @@ def download_file(file_path):
         if progress_bar is not None:
             progress_bar.empty()
 
-@st.cache
+def load_model(model_name):
+  model = tf.saved_model.load(str('saved_model'))
+  model = model.signatures['serving_default']
+  return model
+
+def run_inference_for_single_image(model, image):
+  image = np.asarray(image)
+  # The input needs to be a tensor, convert it using `tf.convert_to_tensor`.
+  input_tensor = tf.convert_to_tensor(image)
+  # The model expects a batch of images, so add an axis with `tf.newaxis`.
+  input_tensor = input_tensor[tf.newaxis,...]
+
+  # Run inference
+  output_dict = model(input_tensor)
+
+  # All outputs are batches tensors.
+  # Convert to numpy arrays, and take index [0] to remove the batch dimension.
+  # We're only interested in the first num_detections.
+  num_detections = int(output_dict.pop('num_detections'))
+  output_dict = {key:value[0, :num_detections].numpy()
+                 for key,value in output_dict.items()}
+  output_dict['num_detections'] = num_detections
+
+  # detection_classes should be ints.
+  output_dict['detection_classes'] = output_dict['detection_classes'].astype(np.int64)
+
+  # Handle models with masks:
+  if 'detection_masks' in output_dict:
+    # Reframe the the bbox mask to the image size.
+    detection_masks_reframed = utils_ops.reframe_box_masks_to_image_masks(
+              output_dict['detection_masks'], output_dict['detection_boxes'],
+               image.shape[0], image.shape[1])
+    detection_masks_reframed = tf.cast(detection_masks_reframed > 0.5,
+                                       tf.uint8)
+    output_dict['detection_masks_reframed'] = detection_masks_reframed.numpy()
+
+  return output_dict
+
 def detect():
-    detection_graph = tf.Graph()
-    with detection_graph.as_default():
-        od_graph_def = tf.GraphDef()
-        with tf.gfile.GFile(PATH_TO_CKPT, 'rb') as fid:
-            serialized_graph = fid.read()
-            od_graph_def.ParseFromString(serialized_graph)
-            tf.import_graph_def(od_graph_def, name='')
-        sess = tf.Session(graph=detection_graph)
+    #might work on streamlit or colab under tensorflow two. Test this 
+  model = tf.compat.v1.saved_model.load_v2('saved_model', None)
+  model = model.signatures['serving_default']
+  # the array based representation of the image will be used later in order to prepare the
+  # result image with boxes and labels on it.
+  image_np = np.array(Image.open(PATH_TO_IMAGE))
+  # Actual detection.
+  output_dict = run_inference_for_single_image(model, image_np)
+  # Visualization of the results of a detection.
+  vis_util.visualize_boxes_and_labels_on_image_array(
+      image_np,
+      output_dict['detection_boxes'],
+      output_dict['detection_classes'],
+      output_dict['detection_scores'],
+      category_index,
+      instance_masks=output_dict.get('detection_masks_reframed', None),
+      use_normalized_coordinates=True,
+      line_thickness=8)
 
-    # Input tensor is the image
-    image_tensor = detection_graph.get_tensor_by_name('image_tensor:0')
-    # Output tensors are the detection boxes, scores, and classes
-    # Each score represents level of confidence for each of the objects.
-    # The score is shown on the result image, together with the class label.
-    detection_boxes = detection_graph.get_tensor_by_name('detection_boxes:0')
-    detection_scores = detection_graph.get_tensor_by_name('detection_scores:0')
-    detection_classes = detection_graph.get_tensor_by_name('detection_classes:0')
-    # Number of objects detected
-    num_detections = detection_graph.get_tensor_by_name('num_detections:0')
+  return image_np
+# def detect():
+#     #located at models/research/object_detection/object_detection_tutorial.ipynb.
+#     detection_model = tf.compat.v1.saved_model.load_v2(str('saved_model'), None)
+#     detection_model = detection_model.signatures['serving_default']
+#
+#     image_np = np.array(Image.open(PATH_TO_IMAGE)) ###
+#     image_np = np.asarray(image_np)
+#     # The input needs to be a tensor, convert it using `tf.convert_to_tensor`.
+#     input_tensor = tf.convert_to_tensor(image_np)
+#     # The model expects a batch of images, so add an axis with `tf.newaxis`.
+#     input_tensor = input_tensor[tf.newaxis,...]
+#
+#     # Run inference
+#     output_dict = detection_model(input_tensor)
+#     print(output_dict)
+#
+#     # All outputs are batches tensors.
+#     # Convert to numpy arrays, and take index [0] to remove the batch dimension.
+#     # We're only interested in the first num_detections.
+#     num_detections = int(output_dict.pop('num_detections'))
+#     output_dict = {key:value[0, :num_detections].numpy()
+#                    for key,value in output_dict.items()}
+#     output_dict['num_detections'] = num_detections
+#
+#     # detection_classes should be ints.
+#     output_dict['detection_classes'] = output_dict['detection_classes'].astype(np.int64)
+#
+#     vis_util.visualize_boxes_and_labels_on_image_array(
+#       image_np,
+#       output_dict['detection_boxes'],
+#       output_dict['detection_classes'],
+#       output_dict['detection_scores'],
+#       category_index,
+#       instance_masks=output_dict.get('detection_masks_reframed', None),
+#       use_normalized_coordinates=True,
+#       line_thickness=8)
 
-    # Load image using OpenCV and
-    # expand image dimensions to have shape: [1, None, None, 3]
-    # i.e. a single-column array, where each item in the column has the pixel RGB value
-    in_image = cv2.imread(PATH_TO_IMAGE)
-    image_rgb = cv2.cvtColor(in_image, cv2.COLOR_BGR2RGB)
-    image_expanded = np.expand_dims(
-        image_rgb, axis=0)
 
-    # Perform the actual detection by running the model with the image as input
-    (boxes, scores, classes, num) = sess.run(
-        [detection_boxes, detection_scores, detection_classes, num_detections],
-        feed_dict={image_tensor: image_expanded})
 
-    # Draw the results of the detection (aka 'visulaize the results')
-    vis_util.visualize_boxes_and_labels_on_image_array(
-        in_image,
-        np.squeeze(boxes),
-        np.squeeze(classes).astype(np.int32),
-        np.squeeze(scores),
-        category_index,
-        use_normalized_coordinates=True,
-        line_thickness=8,
-        min_score_thresh=0.50)
-
-    return in_image
+    # detection_graph = tf.Graph()
+    # with detection_graph.as_default():
+    #     od_graph_def = tf.GraphDef()
+    #     with tf.gfile.GFile(PATH_TO_CKPT, 'rb') as fid:
+    #         serialized_graph = fid.read()
+    #         od_graph_def.ParseFromString(serialized_graph)
+    #         tf.import_graph_def(od_graph_def, name='')
+    #     sess = tf.Session(graph=detection_graph)
+    #
+    # # Input tensor is the image
+    # image_tensor = detection_graph.get_tensor_by_name('image_tensor:0')
+    # # Output tensors are the detection boxes, scores, and classes
+    # # Each score represents level of confidence for each of the objects.
+    # # The score is shown on the result image, together with the class label.
+    # detection_boxes = detection_graph.get_tensor_by_name('detection_boxes:0')
+    # detection_scores = detection_graph.get_tensor_by_name('detection_scores:0')
+    # detection_classes = detection_graph.get_tensor_by_name('detection_classes:0')
+    # # Number of objects detected
+    # num_detections = detection_graph.get_tensor_by_name('num_detections:0')
+    #
+    # # Load image using OpenCV and
+    # # expand image dimensions to have shape: [1, None, None, 3]
+    # # i.e. a single-column array, where each item in the column has the pixel RGB value
+    # in_image = cv2.imread(PATH_TO_IMAGE)
+    # image_rgb = cv2.cvtColor(in_image, cv2.COLOR_BGR2RGB)
+    # image_expanded = np.expand_dims(
+    #     image_rgb, axis=0)
+    #
+    # # Perform the actual detection by running the model with the image as input
+    # (boxes, scores, classes, num) = sess.run(
+    #     [detection_boxes, detection_scores, detection_classes, num_detections],
+    #     feed_dict={image_tensor: image_expanded})
+    #
+    # # Draw the results of the detection (aka 'visulaize the results')
+    # vis_util.visualize_boxes_and_labels_on_image_array(
+    #     in_image,
+    #     np.squeeze(boxes),
+    #     np.squeeze(classes).astype(np.int32),
+    #     np.squeeze(scores),
+    #     category_index,
+    #     use_normalized_coordinates=True,
+    #     line_thickness=8,
+    #     min_score_thresh=0.50)
+    #
+    # return in_image
 
 EXTERNAL_DEPENDENCIES = {
-    "frozen_inference_graph.pb" : {
-        "url": "https://socket-no-socket.s3.eu-west-2.amazonaws.com/frozen_inference_graph.pb",
-        "size": 416113836
+    "saved_model/saved_model.pb" : {
+        "url": "https://socket-no-socket.s3.eu-west-2.amazonaws.com/saved_model.pb",
+        "size": 134516139 # in bytes
     }
 }
 
